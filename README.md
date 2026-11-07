@@ -1,56 +1,60 @@
-# VictoriaMetrics vs Prometheus: hands-on comparison
+# VictoriaMetrics vs Prometheus
 
-A small local lab to get familiar with VictoriaMetrics: run it next to Prometheus, have both scrape the exact same targets, point Grafana at both, and compare what each one costs in CPU, memory and disk.
+I wanted to actually try VictoriaMetrics instead of just reading about it, so I set it up next to Prometheus on my own machine. Both scrape the exact same targets, Grafana is pointed at both, and I compared how much CPU, memory and disk each one uses for the same data.
 
-## What's in the stack
+## What's running
 
-| Service | Port | Role |
-|---|---|---|
-| node-exporter | 9100 | Host metrics (the "real" workload) |
-| Prometheus | 9090 | Baseline TSDB |
-| VictoriaMetrics (single-node) | 8428 | Scrapes the same `prometheus.yml` via `-promscrape.config` |
-| Grafana | 3000 | Both provisioned as datasources, plus a comparison dashboard |
-| avalanche (optional) | 9001 | Synthetic load: 100 metrics x 100 series, ~10k series, no churn |
+- **node-exporter** (9100): real host metrics from my machine
+- **Prometheus** (9090): the baseline
+- **VictoriaMetrics** single-node (8428): scrapes the same `prometheus.yml` as Prometheus
+- **Grafana** (3000): both added as datasources, plus a dashboard comparing them
+- **avalanche** (9001, optional): fake load, about 10k series that stay stable
 
-## Run it
+## How to run it
 
 ```bash
-docker compose up -d                    # idle baseline
-docker compose --profile load up -d     # add synthetic load
-./compare.sh                            # snapshot of CPU, memory, disk, series
+docker compose up -d                    # start without load
+docker compose --profile load up -d     # add the fake load
+./compare.sh                            # CPU, memory, disk and series for both
 ```
 
-On Windows Git Bash, run the script as `MSYS_NO_PATHCONV=1 bash compare.sh`, otherwise Git Bash rewrites the container paths.
+If you're on Windows with Git Bash, run the script like this instead: `MSYS_NO_PATHCONV=1 bash compare.sh`. Otherwise Git Bash messes up the container paths (found that out the hard way).
 
-Grafana: http://localhost:3000 (admin / admin), dashboard "VictoriaMetrics vs Prometheus".
-VictoriaMetrics UI (vmui): http://localhost:8428/vmui
+Grafana is at localhost:3000 (admin / admin), dashboard is called "VictoriaMetrics vs Prometheus". VictoriaMetrics also has its own UI at localhost:8428/vmui.
 
 ## Results
 
-Machine: Windows, Docker Desktop, 30 GB RAM available to Docker
-Run length: ~30 min idle, then ~2 hours under load
+Ran it on Windows with Docker Desktop (30 GB RAM). About 30 min without load, then around 2 hours with it.
 
-| Metric | Prometheus | VictoriaMetrics |
+| | Prometheus | VictoriaMetrics |
 |---|---|---|
-| Active series (idle / load) | 3,023 / 12,905 | 3,008 / 12,878 |
+| Series (idle / load) | 3,023 / 12,905 | 3,008 / 12,878 |
 | Memory (idle / load) | 54.5 MiB / 142.8 MiB | 102.2 MiB / 93.4 MiB |
 | Disk (idle / load) | 2.4 MB / 53.2 MB | 1.5 MB / 10.2 MB |
-| CPU (snapshot, idle / load) | 0.49% / 0.26% | 0.24% / 0.09% |
+| CPU (idle / load) | 0.49% / 0.26% | 0.24% / 0.09% |
 
-![Grafana dashboard under load](load.png)
+Without load:
+
+![Grafana dashboard without load](idle.png)
+
+With load:
+
+![Grafana dashboard with load](load.png)
 
 ## What I noticed
 
-**Setup was basically zero effort.** VictoriaMetrics read the existing Prometheus scrape config with one flag (`-promscrape.config`), no changes. Grafana talks to it through the standard Prometheus datasource, and the same PromQL query returned the same graph from both backends.
+**Setup was really easy.** I just pointed VictoriaMetrics at the same Prometheus scrape config with one flag and it worked. Grafana connects to it with the normal Prometheus datasource, and running the same query on both gave me the same graph.
 
-**Memory: Prometheus grew with the data, VictoriaMetrics didn't.** At idle Prometheus was actually lighter (54 MiB vs 102 MiB). Under ~13k series Prometheus went up ~2.6x to 143 MiB, while VictoriaMetrics stayed flat around 93-102 MiB. So VM's memory looks more like a fixed baseline, and Prometheus scales with series count.
+**Memory surprised me a bit.** Without load, Prometheus was actually lighter (54 vs 102 MiB). But once I added the load, Prometheus went up to 143 MiB and VictoriaMetrics basically didn't move. So it looks like VM has a higher starting point but doesn't really grow with more series, at least at this size.
 
-**Disk: about 5x smaller on VictoriaMetrics** (10.2 MB vs 53.2 MB for the same data). One caveat: at ~2 hours most of Prometheus's data is still in its WAL, which isn't compressed into blocks until compaction kicks in, so a longer run would likely narrow the gap somewhat.
+**Disk was about 5x smaller on VictoriaMetrics** (10 vs 53 MB for the same data). To be fair though, after 2 hours most of Prometheus's data is probably still in its WAL and hasn't been compacted yet, so the gap would likely shrink on a longer run.
 
-**The most interesting finding was an accident.** My first load test used avalanche's defaults, which churn ~50k series every minute. Prometheus ingested all of it and climbed to ~3M series and 4.5 GB of RAM. VictoriaMetrics refused the scrape entirely: the response was bigger than its default 16 MB `-promscrape.maxScrapeSize` limit, and the targets page showed a clear error naming the exact flag and config option to change. That's a sensible guardrail, a single misbehaving exporter can't blow up the monitoring system by default. It also meant that first comparison was invalid (VM never stored the data), so I shrank the load to a steady ~10k series and reran from scratch.
+**The best part was a mistake.** My first load test used avalanche's default settings, which turned out to create about 50k series and replace them every minute. Prometheus just took all of it and ended up at around 3 million series and 4.5 GB of RAM. VictoriaMetrics refused it completely, because the metrics page was bigger than its default 16 MB scrape limit (`-promscrape.maxScrapeSize`). The targets page showed a clear error that even told me which flag to change.
 
-**CPU** was too low on both to say much from a point-in-time snapshot. Both stayed under 1%.
+At first my numbers looked amazing for VictoriaMetrics, until I noticed it had like 3k series vs Prometheus's 3 million, so it wasn't storing the same data at all. I made the load smaller and steady, wiped everything and ran it again. That's what the numbers above are from. Honestly I like that limit, one broken exporter can't take down your whole monitoring setup by default.
 
-## Caveats
+**CPU** was under 1% on both the whole time, so not much to compare there.
 
-This is a short single-machine test, not a production benchmark. Numbers will differ with retention, cardinality, churn and query load.
+## Keep in mind
+
+This was one machine and a couple of hours, not a real benchmark. With more data, longer retention or heavy querying the numbers would look different.
