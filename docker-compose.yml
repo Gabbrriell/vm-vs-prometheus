@@ -1,0 +1,69 @@
+services:
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=1d"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoriametrics
+    restart: unless-stopped
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=1d"
+      - "-promscrape.config=/etc/prometheus/prometheus.yml"
+      - "-httpListenAddr=:8428"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - vm-data:/storage
+    ports:
+      - "8428:8428"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - victoriametrics
+
+  avalanche:
+    image: quay.io/prometheuscommunity/avalanche:latest
+    container_name: avalanche
+    profiles: ["load"]
+    command:
+      - "--gauge-metric-count=100"
+      - "--series-count=100"
+      - "--label-count=5"
+      - "--series-interval=0"
+      - "--value-interval=15"
+    ports:
+      - "9001:9001"
+
+volumes:
+  prom-data:
+  vm-data:

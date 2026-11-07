@@ -1,0 +1,12 @@
+== Container CPU / memory (docker stats) ==
+NAME              CPU %     MEM USAGE / LIMIT
+prometheus        0.49%     54.5MiB / 30.07GiB
+victoriametrics   0.24%     102.2MiB / 30.07GiB
+
+== On-disk data size ==
+prometheus:      2.4M
+victoriametrics: 1.5M
+
+== Active series ==
+prometheus:      3023
+victoriametrics: 3008
